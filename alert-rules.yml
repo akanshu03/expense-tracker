@@ -1,0 +1,27 @@
+groups:
+  - name: expense-tracker
+    rules:
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[2m]))
+            / clamp_min(sum(rate(http_requests_total[2m])), 1) > 0.05
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "5xx error ratio above 5% for 1 minute"
+
+      - alert: HighLatencyP95
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 1
+        for: 3m
+        labels: { severity: warning }
+        annotations:
+          summary: "p95 latency above 1s for 3 minutes"
+
+      - alert: InstanceDown
+        expr: up{job="expense-tracker"} == 0
+        for: 30s
+        labels: { severity: critical }
+        annotations:
+          summary: "expense-tracker target is down"

@@ -1,0 +1,81 @@
+name: CD
+
+# Runs only after CI succeeded on main. Same image (commit SHA) is promoted
+# staging -> production; nothing is rebuilt between environments.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Commit SHA (already in ECR) to deploy
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: expense-tracker
+
+concurrency:
+  group: cd
+  cancel-in-progress: false # never cancel a deployment mid-flight
+
+jobs:
+  resolve:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+    steps:
+      - id: sha
+        run: echo "sha=${{ github.event.inputs.sha || github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+
+  deploy-staging:
+    needs: resolve
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_CD_ROLE_ARN_STAGING }}
+          aws-region: ${{ env.AWS_REGION }}
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Blue/green deploy to staging
+        run: |
+          ./scripts/deploy.sh \
+            --env staging \
+            --image "${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ needs.resolve.outputs.sha }}"
+      - name: Post-deploy smoke test
+        run: ./scripts/smoke-test.sh "${{ vars.STAGING_URL }}" "${{ needs.resolve.outputs.sha }}"
+
+  deploy-production:
+    needs: [resolve, deploy-staging]
+    runs-on: ubuntu-latest
+    # 'production' environment has Required reviewers => manual approval gate
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_CD_ROLE_ARN_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Blue/green deploy to production (auto-rollback on alarm or failed health check)
+        run: |
+          ./scripts/deploy.sh \
+            --env production \
+            --image "${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ needs.resolve.outputs.sha }}"
+      - name: Post-deploy smoke test
+        run: ./scripts/smoke-test.sh "${{ vars.PROD_URL }}" "${{ needs.resolve.outputs.sha }}"

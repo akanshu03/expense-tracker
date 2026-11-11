@@ -1,0 +1,9 @@
+environment            = "production"
+alarm_email            = "devops@example.com"
+github_repository      = "YOUR_ORG/expense-tracker"
+desired_count          = 2
+db_multi_az            = true
+single_nat_gateway     = false
+create_ecr             = true # shared ECR repo + GitHub OIDC provider live in the production stack
+deployment_config_name = "CodeDeployDefault.ECSCanary10Percent5Minutes"
+vpc_cidr               = "10.20.0.0/16"
